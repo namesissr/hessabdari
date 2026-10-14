@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hesabdari
+      POSTGRES_USER: hesabdari
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hesabdari']
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hesabdari:${POSTGRES_PASSWORD}@db:5432/hesabdari?schema=public
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      SECURE_COOKIE: ${SECURE_COOKIE:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@hesabdari.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+    ports:
+      - '127.0.0.1:3200:3200'
+
+volumes:
+  pgdata:

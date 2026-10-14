@@ -1,0 +1,480 @@
+// حسابداری — سیستم مالی مادر
+// اصول: دفتر مال شخصیت حقوقی (Entity) است؛ کسب‌وکار/پروژه/مرکز هزینه «بُعد» هستند.
+// مبالغ ریالی BigInt، مقادیر (گرم/واحد/توکن) Decimal. تاریخ‌ها میلادی (@db.Date) ذخیره و شمسی نمایش داده می‌شوند.
+// قیود تغییرناپذیری سند قطعی و تراز بودن سند در migrationهای SQL (trigger) پیاده شده‌اند.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── سازمان
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum OwnershipMethod {
+  SUBSIDIARY // تلفیق کامل
+  ASSOCIATE // ارزش ویژه
+  COST // بهای تمام‌شده
+}
+
+model Entity {
+  id                  String       @id @default(cuid())
+  code                String       @unique
+  name                String
+  legalName           String?
+  legalType           String?
+  nationalId          String?
+  economicCode        String?
+  registrationNo      String?
+  address             String?
+  baseCurrency        String       @default("IRR")
+  // پیش‌فرض شروع سال مالی (شمسی) برای پیشنهاد سال بعد — در پنل قابل تغییر
+  fiscalStartMonth    Int          @default(1)
+  fiscalStartDay      Int          @default(1)
+  parentId            String?
+  chartId             String
+  status              EntityStatus @default(ACTIVE)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  parent          Entity?           @relation("EntityTree", fields: [parentId], references: [id])
+  children        Entity[]          @relation("EntityTree")
+  chart           Chart             @relation(fields: [chartId], references: [id])
+  fiscalYears     FiscalYear[]
+  vouchers        Voucher[]
+  businessUnits   BusinessUnit[]
+  dimensionValues DimensionValue[]
+  ownerships      EntityOwnership[] @relation("Owner")
+  ownedBy         EntityOwnership[] @relation("Owned")
+  userScopes      UserScope[]
+
+  @@map("entities")
+}
+
+model EntityOwnership {
+  id        String          @id @default(cuid())
+  ownerId   String
+  ownedId   String
+  percent   Decimal         @db.Decimal(9, 4)
+  method    OwnershipMethod
+  validFrom DateTime        @db.Date
+  validTo   DateTime?       @db.Date
+
+  owner Entity @relation("Owner", fields: [ownerId], references: [id])
+  owned Entity @relation("Owned", fields: [ownedId], references: [id])
+
+  @@map("entity_ownerships")
+}
+
+enum FiscalYearStatus {
+  OPEN
+  CLOSED
+}
+
+enum PeriodStatus {
+  OPEN
+  LOCKED
+  CLOSED
+}
+
+model FiscalYear {
+  id        String           @id @default(cuid())
+  entityId  String
+  title     String
+  startDate DateTime         @db.Date
+  endDate   DateTime         @db.Date
+  status    FiscalYearStatus @default(OPEN)
+  closedAt  DateTime?
+  createdAt DateTime         @default(now())
+
+  entity   Entity         @relation(fields: [entityId], references: [id])
+  periods  FiscalPeriod[]
+  vouchers Voucher[]
+
+  @@unique([entityId, title])
+  @@index([entityId, startDate])
+  @@map("fiscal_years")
+}
+
+model FiscalPeriod {
+  id           String       @id @default(cuid())
+  fiscalYearId String
+  no           Int
+  title        String
+  startDate    DateTime     @db.Date
+  endDate      DateTime     @db.Date
+  status       PeriodStatus @default(OPEN)
+
+  fiscalYear FiscalYear  @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  vouchers   Voucher[]
+  balances   GlBalance[]
+
+  @@unique([fiscalYearId, no])
+  @@map("fiscal_periods")
+}
+
+// ───────────────────────── ابعاد (تفصیلی شناور + مرکز هزینه/درآمد + پروژه + ...)
+
+model DimensionType {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  name           String
+  description    String?
+  isHierarchical Boolean  @default(false)
+  isSystem       Boolean  @default(false)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  values   DimensionValue[]
+  rules    AccountDimensionRule[]
+  setItems DimensionSetItem[]
+
+  @@map("dimension_types")
+}
+
+model DimensionValue {
+  id         String   @id @default(cuid())
+  typeId     String
+  entityId   String? // null = در سطح کل مجموعه
+  code       String
+  name       String
+  parentId   String?
+  attributes Json?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  type         DimensionType      @relation(fields: [typeId], references: [id])
+  entity       Entity?            @relation(fields: [entityId], references: [id])
+  parent       DimensionValue?    @relation("DimTree", fields: [parentId], references: [id])
+  children     DimensionValue[]   @relation("DimTree")
+  businessUnit BusinessUnit?
+  setItems     DimensionSetItem[]
+  userScopes   UserScope[]
+
+  @@unique([typeId, code])
+  @@map("dimension_values")
+}
+
+enum BusinessKind {
+  WEBSITE
+  TRADING
+  PROJECT
+  INVESTMENT
+  HEADQUARTERS
+  OTHER
+}
+
+model BusinessUnit {
+  dimensionValueId String       @id
+  entityId         String
+  kind             BusinessKind @default(WEBSITE)
+  domain           String?
+  launchedAt       DateTime?    @db.Date
+  description      String?
+
+  dimensionValue DimensionValue @relation(fields: [dimensionValueId], references: [id], onDelete: Cascade)
+  entity         Entity         @relation(fields: [entityId], references: [id])
+
+  @@map("business_units")
+}
+
+// هر ترکیب یکتای مقادیر ابعاد یک بار ذخیره می‌شود؛ ردیف سند فقط شناسهٔ مجموعه را نگه می‌دارد.
+model DimensionSet {
+  id        Int                @id @default(autoincrement())
+  hash      String             @unique
+  items     DimensionSetItem[]
+  lines     VoucherLine[]
+  balances  GlBalance[]
+
+  @@map("dimension_sets")
+}
+
+model DimensionSetItem {
+  setId   Int
+  typeId  String
+  valueId String
+
+  set   DimensionSet   @relation(fields: [setId], references: [id], onDelete: Cascade)
+  type  DimensionType  @relation(fields: [typeId], references: [id])
+  value DimensionValue @relation(fields: [valueId], references: [id])
+
+  @@id([setId, typeId])
+  @@index([valueId])
+  @@map("dimension_set_items")
+}
+
+// ───────────────────────── چارت حساب‌ها
+
+enum AccountLevel {
+  GROUP // گروه
+  GL // کل
+  SUBSIDIARY // معین
+}
+
+enum AccountCategory {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+  MEMO
+}
+
+enum NormalSide {
+  DEBIT
+  CREDIT
+  BOTH
+}
+
+enum DimRequirement {
+  REQUIRED
+  OPTIONAL
+  FORBIDDEN
+}
+
+model Chart {
+  id              String   @id @default(cuid())
+  code            String   @unique
+  name            String
+  isGroupTemplate Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  accounts Account[]
+  entities Entity[]
+
+  @@map("charts")
+}
+
+model Account {
+  id          String          @id @default(cuid())
+  chartId     String
+  code        String
+  name        String
+  level       AccountLevel
+  parentId    String?
+  category    AccountCategory
+  normalSide  NormalSide
+  isPostable  Boolean         @default(false)
+  allowFx     Boolean         @default(false)
+  // برچسب‌ها برای داشبورد و گزارش‌ها: CASH, RECEIVABLE, PAYABLE, LOAN, INVESTMENT, CURRENT, NON_CURRENT, COGS, OPEX, FINANCE, OTHER_INCOME
+  tags        String[]        @default([])
+  // نقش سیستمی (یکتا در چارت): RETAINED_EARNINGS و ...
+  systemRole  String?
+  description String?
+  active      Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  chart    Chart                  @relation(fields: [chartId], references: [id])
+  parent   Account?               @relation("AccountTree", fields: [parentId], references: [id])
+  children Account[]              @relation("AccountTree")
+  rules    AccountDimensionRule[]
+  lines    VoucherLine[]
+  balances GlBalance[]
+
+  @@unique([chartId, code])
+  @@unique([chartId, systemRole])
+  @@map("accounts")
+}
+
+model AccountDimensionRule {
+  accountId       String
+  dimensionTypeId String
+  requirement     DimRequirement
+  position        Int            @default(1)
+
+  account       Account       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  dimensionType DimensionType @relation(fields: [dimensionTypeId], references: [id])
+
+  @@id([accountId, dimensionTypeId])
+  @@map("account_dimension_rules")
+}
+
+// ───────────────────────── اسناد حسابداری
+
+enum VoucherType {
+  OPENING // افتتاحیه
+  NORMAL // عادی
+  ADJUSTMENT // اصلاحی
+  ALLOCATION // تسهیم
+  REVERSAL // برگشت
+  SYSTEM // صادره از زیرسیستم‌ها
+  PL_CLOSING // بستن حساب‌های موقت
+  CLOSING // اختتامیه
+}
+
+enum VoucherStatus {
+  DRAFT // یادداشت
+  REVIEWED // بررسی‌شده
+  POSTED // قطعی
+}
+
+model Voucher {
+  id             String        @id @default(cuid())
+  entityId       String
+  fiscalYearId   String
+  periodId       String
+  number         Int? // شماره قطعی — هنگام قطعی شدن، بدون فاصله
+  draftNo        Int // شماره موقت
+  dailyNo        Int?
+  date           DateTime      @db.Date
+  type           VoucherType   @default(NORMAL)
+  status         VoucherStatus @default(DRAFT)
+  description    String?
+  sourceModule   String?
+  sourceRef      String?
+  idempotencyKey String?       @unique
+  reversalOfId   String?       @unique
+  totalAmount    BigInt        @default(0)
+  createdById    String
+  reviewedById   String?
+  postedById     String?
+  postedAt       DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  entity     Entity        @relation(fields: [entityId], references: [id])
+  fiscalYear FiscalYear    @relation(fields: [fiscalYearId], references: [id])
+  period     FiscalPeriod  @relation(fields: [periodId], references: [id])
+  reversalOf Voucher?      @relation("Reversal", fields: [reversalOfId], references: [id])
+  reversedBy Voucher?      @relation("Reversal")
+  createdBy  User          @relation("VoucherCreatedBy", fields: [createdById], references: [id])
+  reviewedBy User?         @relation("VoucherReviewedBy", fields: [reviewedById], references: [id])
+  postedBy   User?         @relation("VoucherPostedBy", fields: [postedById], references: [id])
+  lines      VoucherLine[]
+
+  @@unique([fiscalYearId, number])
+  @@unique([fiscalYearId, draftNo])
+  @@index([entityId, date])
+  @@index([status])
+  @@map("vouchers")
+}
+
+model VoucherLine {
+  id             String    @id @default(cuid())
+  voucherId      String
+  lineNo         Int
+  accountId      String
+  dimensionSetId Int
+  debit          BigInt    @default(0)
+  credit         BigInt    @default(0)
+  currency       String?
+  fxAmount       Decimal?  @db.Decimal(28, 6)
+  fxRate         Decimal?  @db.Decimal(24, 6)
+  quantity       Decimal?  @db.Decimal(28, 10)
+  unit           String?
+  dueDate        DateTime? @db.Date
+  description    String?
+
+  voucher      Voucher      @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  account      Account      @relation(fields: [accountId], references: [id])
+  dimensionSet DimensionSet @relation(fields: [dimensionSetId], references: [id])
+
+  @@index([voucherId])
+  @@index([accountId])
+  @@index([dimensionSetId])
+  @@map("voucher_lines")
+}
+
+// مانده‌های تجمیعی — هنگام قطعی شدن سند به‌روز می‌شود (برای داشبورد)
+model GlBalance {
+  entityId       String
+  periodId       String
+  accountId      String
+  dimensionSetId Int
+  debit          BigInt @default(0)
+  credit         BigInt @default(0)
+
+  period       FiscalPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  account      Account      @relation(fields: [accountId], references: [id])
+  dimensionSet DimensionSet @relation(fields: [dimensionSetId], references: [id])
+
+  @@id([periodId, accountId, dimensionSetId])
+  @@index([entityId])
+  @@map("gl_balances")
+}
+
+model NumberSequence {
+  key   String @id
+  value Int    @default(0)
+
+  @@map("number_sequences")
+}
+
+model ExchangeRate {
+  id       String   @id @default(cuid())
+  currency String
+  date     DateTime @db.Date
+  rate     Decimal  @db.Decimal(24, 6)
+  source   String   @default("manual")
+
+  @@unique([currency, date, source])
+  @@map("exchange_rates")
+}
+
+// ───────────────────────── کاربران، دسترسی و ممیزی
+
+enum Role {
+  ADMIN // مدیر سیستم
+  FINANCE_MANAGER // مدیر مالی — قطعی کردن، برگشت، قفل دوره
+  ACCOUNTANT // حسابدار — ثبت و ویرایش یادداشت
+  VIEWER // فقط مشاهده
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         Role      @default(ACCOUNTANT)
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  scopes           UserScope[]
+  vouchersCreated  Voucher[]   @relation("VoucherCreatedBy")
+  vouchersReviewed Voucher[]   @relation("VoucherReviewedBy")
+  vouchersPosted   Voucher[]   @relation("VoucherPostedBy")
+
+  @@map("users")
+}
+
+// محدودهٔ داده: بدون ردیف = دسترسی به همه
+model UserScope {
+  id               String  @id @default(cuid())
+  userId           String
+  entityId         String?
+  dimensionValueId String?
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entity         Entity?         @relation(fields: [entityId], references: [id])
+  dimensionValue DimensionValue? @relation(fields: [dimensionValueId], references: [id])
+
+  @@map("user_scopes")
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  at         DateTime @default(now())
+  userId     String?
+  action     String
+  objectType String
+  objectId   String?
+  entityId   String?
+  data       Json?
+  prevHash   String?
+  hash       String
+
+  @@index([objectType, objectId])
+  @@map("audit_log")
+}
