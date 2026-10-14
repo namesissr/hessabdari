@@ -25,6 +25,7 @@ services:
       SECURE_COOKIE: ${SECURE_COOKIE:-true}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@hesabdari.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+    # فقط روی لوکال‌هاست باز است؛ دسترسی از بیرون از طریق Nginx/Caddy با HTTPS
     ports:
       - '127.0.0.1:3200:3200'
 
