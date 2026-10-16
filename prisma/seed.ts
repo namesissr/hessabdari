@@ -1,9 +1,12 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 import { installChartTemplate, ensureSystemDimensions } from '../src/modules/accounts/install';
 import { buildPeriods } from '../src/modules/fiscal/fiscal';
 import { jToDate, addDays, dateToJ, todayUtc } from '../src/lib/jalali';
+import { DEFAULT_LAYOUT } from '../src/modules/treasury/cheque-print';
+import { SYSTEM_USER_EMAIL } from '../src/modules/ingest/engine';
 
 const prisma = new PrismaClient();
 
@@ -81,6 +84,26 @@ async function main() {
       where: { typeId_code: { typeId: ccType.id, code: c.code } },
       update: {},
       create: { typeId: ccType.id, code: c.code, name: c.name, parentId: parent?.id ?? null },
+    });
+  }
+
+  if ((await prisma.chequeLayout.count()) === 0) {
+    await prisma.chequeLayout.create({
+      data: {
+        name: DEFAULT_LAYOUT.name,
+        widthMm: DEFAULT_LAYOUT.widthMm,
+        heightMm: DEFAULT_LAYOUT.heightMm,
+        fields: DEFAULT_LAYOUT.fields as object,
+        isDefault: true,
+      },
+    });
+    console.log('cheque layout created');
+  }
+
+  // کاربر سیستمی برای اسناد خودکار (ورود با آن ممکن نیست)
+  if (!(await prisma.user.findUnique({ where: { email: SYSTEM_USER_EMAIL } }))) {
+    await prisma.user.create({
+      data: { email: SYSTEM_USER_EMAIL, name: 'سیستم (اسناد خودکار)', role: 'VIEWER', active: false, passwordHash: await bcrypt.hash(randomBytes(32).toString('hex'), 10) },
     });
   }
 

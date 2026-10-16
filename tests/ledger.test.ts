@@ -227,3 +227,13 @@ test('کلید idempotency سند تکراری نمی‌سازد', async () => {
   const b = await createDraft(db, userId, input);
   assert.equal(a.id, b.id);
 });
+
+test('بررسی سلامت دفاتر: توازن، پیوستگی شماره و زنجیرهٔ لاگ ممیزی', async () => {
+  const { healthChecks } = await import('@/modules/reports/health');
+  const fy = await db.fiscalYear.findFirstOrThrow({ where: { entityId }, orderBy: { startDate: 'desc' } });
+  const checks = await healthChecks(db, entityId, fy.id);
+  const by = (k: string) => checks.find((c) => c.key === k)!;
+  assert.equal(by('balance').status, 'ok');
+  assert.equal(by('numbering').status, 'ok');
+  assert.equal(by('audit').status, 'ok', by('audit').detail);
+});

@@ -52,6 +52,14 @@ model Entity {
   fiscalYears     FiscalYear[]
   vouchers        Voucher[]
   businessUnits   BusinessUnit[]
+  parties         Party[]
+  bankAccounts    BankAccount[]
+  invoices        Invoice[]
+  ingestSources   IngestSource[]
+  allocationRules AllocationRule[]
+  voucherTemplates VoucherTemplate[]
+  cheques         Cheque[]
+  treasuryTxns    TreasuryTxn[]
   dimensionValues DimensionValue[]
   ownerships      EntityOwnership[] @relation("Owner")
   ownedBy         EntityOwnership[] @relation("Owned")
@@ -115,8 +123,9 @@ model FiscalPeriod {
   status       PeriodStatus @default(OPEN)
 
   fiscalYear FiscalYear  @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
-  vouchers   Voucher[]
-  balances   GlBalance[]
+  vouchers       Voucher[]
+  balances       GlBalance[]
+  allocationRuns AllocationRun[]
 
   @@unique([fiscalYearId, no])
   @@map("fiscal_periods")
@@ -157,6 +166,8 @@ model DimensionValue {
   entity       Entity?            @relation(fields: [entityId], references: [id])
   parent       DimensionValue?    @relation("DimTree", fields: [parentId], references: [id])
   children     DimensionValue[]   @relation("DimTree")
+  party        Party?
+  bankAccount  BankAccount?
   businessUnit BusinessUnit?
   setItems     DimensionSetItem[]
   userScopes   UserScope[]
@@ -278,8 +289,11 @@ model Account {
   chart    Chart                  @relation(fields: [chartId], references: [id])
   parent   Account?               @relation("AccountTree", fields: [parentId], references: [id])
   children Account[]              @relation("AccountTree")
-  rules    AccountDimensionRule[]
-  lines    VoucherLine[]
+  rules        AccountDimensionRule[]
+  lines        VoucherLine[]
+  bankAccounts BankAccount[]
+  allocations  TreasuryAllocation[]
+  invoiceLines InvoiceLine[]
   balances GlBalance[]
 
   @@unique([chartId, code])
@@ -351,7 +365,12 @@ model Voucher {
   createdBy  User          @relation("VoucherCreatedBy", fields: [createdById], references: [id])
   reviewedBy User?         @relation("VoucherReviewedBy", fields: [reviewedById], references: [id])
   postedBy   User?         @relation("VoucherPostedBy", fields: [postedById], references: [id])
-  lines      VoucherLine[]
+  lines        VoucherLine[]
+  treasuryTxns TreasuryTxn[] @relation("TreasuryVoucher")
+  chequeEvents ChequeEvent[] @relation("ChequeEventVoucher")
+  invoice      Invoice?      @relation("InvoiceVoucher")
+  ingestEvents IngestEvent[] @relation("IngestVoucher")
+  allocationRun AllocationRun? @relation("AllocationVoucher")
 
   @@unique([fiscalYearId, number])
   @@unique([fiscalYearId, draftNo])
@@ -445,6 +464,13 @@ model User {
   vouchersCreated  Voucher[]   @relation("VoucherCreatedBy")
   vouchersReviewed Voucher[]   @relation("VoucherReviewedBy")
   vouchersPosted   Voucher[]   @relation("VoucherPostedBy")
+  chequesCreated   Cheque[]
+  chequeEvents     ChequeEvent[]
+  treasuryTxns     TreasuryTxn[]
+  invoices         Invoice[]
+  settlements      Settlement[]
+  allocationRuns   AllocationRun[]
+  voucherTemplates VoucherTemplate[]
 
   @@map("users")
 }
@@ -477,4 +503,523 @@ model AuditLog {
 
   @@index([objectType, objectId])
   @@map("audit_log")
+}
+
+// ───────────────────────── فاز ۲: اشخاص، بانک و صندوق، خزانه، چک
+
+enum PartyKind {
+  PERSON
+  COMPANY
+}
+
+/// طرف حساب: مشتری، تأمین‌کننده، کارمند، سهامدار… (به یک مقدار بُعد PARTY وصل است)
+model Party {
+  id               String    @id @default(cuid())
+  dimensionValueId String    @unique
+  entityId         String?
+  kind             PartyKind @default(COMPANY)
+  nationalCode     String?
+  economicCode     String?
+  registrationNo   String?
+  phone            String?
+  mobile           String?
+  email            String?
+  address          String?
+  bankName         String?
+  accountNo        String?
+  iban             String?
+  roles            String[]  @default([])
+  notes            String?
+  active           Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  dimensionValue DimensionValue       @relation(fields: [dimensionValueId], references: [id], onDelete: Cascade)
+  entity         Entity?              @relation(fields: [entityId], references: [id])
+  bankAccounts   BankAccount[]
+  cheques        Cheque[]
+  chequeEvents   ChequeEvent[]
+  treasuryTxns   TreasuryTxn[]
+  allocations    TreasuryAllocation[]
+  invoices       Invoice[]
+
+  @@map("parties")
+}
+
+enum BankAccountKind {
+  BANK
+  CASH
+  PETTY_CASH
+}
+
+/// حساب بانکی، صندوق یا تنخواه (به یک مقدار بُعد BANK_ACCOUNT وصل است)
+model BankAccount {
+  id               String          @id @default(cuid())
+  dimensionValueId String          @unique
+  entityId         String
+  kind             BankAccountKind @default(BANK)
+  bankName         String?
+  branch           String?
+  accountNo        String?
+  iban             String?
+  cardNo           String?
+  currency         String          @default("IRR")
+  glAccountId      String
+  custodianPartyId String?
+  description      String?
+  active           Boolean         @default(true)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  dimensionValue DimensionValue @relation(fields: [dimensionValueId], references: [id], onDelete: Cascade)
+  entity         Entity         @relation(fields: [entityId], references: [id])
+  glAccount      Account        @relation(fields: [glAccountId], references: [id])
+  custodian      Party?         @relation(fields: [custodianPartyId], references: [id])
+  chequeBooks    ChequeBook[]
+  cheques        Cheque[]
+  chequeEvents   ChequeEvent[]
+  items          TreasuryItem[] @relation("ItemBank")
+  itemsTo        TreasuryItem[] @relation("ItemBankTo")
+
+  @@map("bank_accounts")
+}
+
+/// قالب چاپ چک — مختصات هر فیلد روی برگهٔ چک بر حسب میلی‌متر
+model ChequeLayout {
+  id        String   @id @default(cuid())
+  name      String
+  bankName  String?
+  widthMm   Float    @default(195)
+  heightMm  Float    @default(85)
+  offsetXMm Float    @default(0)
+  offsetYMm Float    @default(0)
+  fields    Json
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chequeBooks ChequeBook[]
+
+  @@map("cheque_layouts")
+}
+
+model ChequeBook {
+  id            String   @id @default(cuid())
+  bankAccountId String
+  name          String
+  serialFrom    String?
+  serialTo      String?
+  layoutId      String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  bankAccount BankAccount   @relation(fields: [bankAccountId], references: [id])
+  layout      ChequeLayout? @relation(fields: [layoutId], references: [id])
+  cheques     Cheque[]
+
+  @@map("cheque_books")
+}
+
+enum ChequeDirection {
+  RECEIVED
+  ISSUED
+}
+
+enum ChequeStatus {
+  IN_HAND
+  DEPOSITED
+  CLEARED
+  ENDORSED
+  ISSUED
+  PAID
+  BOUNCED
+  RETURNED
+  CANCELLED
+}
+
+model Cheque {
+  id               String          @id @default(cuid())
+  entityId         String
+  direction        ChequeDirection
+  status           ChequeStatus
+  bankAccountId    String?
+  chequeBookId     String?
+  serialNo         String
+  sayadId          String?
+  bankName         String?
+  branch           String?
+  accountNo        String?
+  drawerName       String?
+  amount           BigInt
+  issueDate        DateTime?       @db.Date
+  dueDate          DateTime        @db.Date
+  partyId          String?
+  counterpartyName String?
+  description      String?
+  businessDimId    String?
+  projectDimId     String?
+  isGuarantee      Boolean         @default(false)
+  location         String?
+  printedAt        DateTime?
+  printCount       Int             @default(0)
+  createdById      String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  entity      Entity         @relation(fields: [entityId], references: [id])
+  bankAccount BankAccount?   @relation(fields: [bankAccountId], references: [id])
+  chequeBook  ChequeBook?    @relation(fields: [chequeBookId], references: [id])
+  party       Party?         @relation(fields: [partyId], references: [id])
+  createdBy   User           @relation(fields: [createdById], references: [id])
+  events      ChequeEvent[]
+  items       TreasuryItem[]
+
+  @@index([entityId, direction, status])
+  @@index([dueDate])
+  @@map("cheques")
+}
+
+enum ChequeEventType {
+  REGISTER
+  DEPOSIT
+  CLEAR
+  BOUNCE
+  ENDORSE
+  RETURN
+  CANCEL
+  PAY
+  NOTE
+}
+
+model ChequeEvent {
+  id            String          @id @default(cuid())
+  chequeId      String
+  type          ChequeEventType
+  date          DateTime        @db.Date
+  description   String?
+  voucherId     String?
+  bankAccountId String?
+  partyId       String?
+  feeAmount     BigInt          @default(0)
+  createdById   String
+  createdAt     DateTime        @default(now())
+
+  cheque      Cheque       @relation(fields: [chequeId], references: [id], onDelete: Cascade)
+  voucher     Voucher?     @relation("ChequeEventVoucher", fields: [voucherId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+  party       Party?       @relation(fields: [partyId], references: [id])
+  createdBy   User         @relation(fields: [createdById], references: [id])
+
+  @@index([chequeId])
+  @@map("cheque_events")
+}
+
+enum TreasuryType {
+  RECEIPT
+  PAYMENT
+  TRANSFER
+}
+
+enum TreasuryStatus {
+  DRAFT
+  POSTED
+}
+
+model TreasuryTxn {
+  id            String         @id @default(cuid())
+  entityId      String
+  type          TreasuryType
+  number        Int
+  date          DateTime       @db.Date
+  partyId       String?
+  description   String?
+  businessDimId String?
+  projectDimId  String?
+  totalAmount   BigInt         @default(0)
+  status        TreasuryStatus @default(DRAFT)
+  voucherId     String?        @unique
+  createdById   String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  entity      Entity               @relation(fields: [entityId], references: [id])
+  party       Party?               @relation(fields: [partyId], references: [id])
+  voucher     Voucher?             @relation("TreasuryVoucher", fields: [voucherId], references: [id])
+  createdBy   User                 @relation(fields: [createdById], references: [id])
+  items       TreasuryItem[]
+  allocations TreasuryAllocation[]
+  settlements Settlement[]
+
+  @@unique([entityId, type, number])
+  @@index([entityId, date])
+  @@map("treasury_txns")
+}
+
+enum PayMethod {
+  CASH
+  BANK
+  CARD
+  GATEWAY
+  CHEQUE_NEW
+  CHEQUE_ENDORSE
+}
+
+/// «از طریق چه چیزی» پول جابه‌جا شد
+model TreasuryItem {
+  id              String    @id @default(cuid())
+  txnId           String
+  method          PayMethod
+  bankAccountId   String?
+  toBankAccountId String?
+  chequeId        String?
+  amount          BigInt
+  feeAmount       BigInt    @default(0)
+  reference       String?
+  description     String?
+  meta            Json?
+
+  txn           TreasuryTxn  @relation(fields: [txnId], references: [id], onDelete: Cascade)
+  bankAccount   BankAccount? @relation("ItemBank", fields: [bankAccountId], references: [id])
+  toBankAccount BankAccount? @relation("ItemBankTo", fields: [toBankAccountId], references: [id])
+  cheque        Cheque?      @relation(fields: [chequeId], references: [id])
+
+  @@index([txnId])
+  @@map("treasury_items")
+}
+
+/// «بابت چه حسابی» بود
+model TreasuryAllocation {
+  id              String  @id @default(cuid())
+  txnId           String
+  accountId       String
+  partyId         String?
+  businessDimId   String?
+  costCenterDimId String?
+  projectDimId    String?
+  invoiceId       String?
+  amount          BigInt
+  description     String?
+
+  invoice Invoice?    @relation(fields: [invoiceId], references: [id])
+  txn     TreasuryTxn @relation(fields: [txnId], references: [id], onDelete: Cascade)
+  account Account     @relation(fields: [accountId], references: [id])
+  party   Party?      @relation(fields: [partyId], references: [id])
+
+  @@index([txnId])
+  @@map("treasury_allocations")
+}
+
+// ───────────────────────── فاز ۳: فاکتور، تطبیق، اتصال سایت‌ها، تسهیم، قالب سند
+
+enum InvoiceType {
+  SALES // فروش
+  PURCHASE // خرید
+  SALES_RETURN // برگشت از فروش
+  PURCHASE_RETURN // برگشت از خرید
+}
+
+enum InvoiceStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  entityId      String
+  type          InvoiceType
+  number        Int
+  date          DateTime      @db.Date
+  dueDate       DateTime?     @db.Date
+  partyId       String
+  businessDimId String?
+  projectDimId  String?
+  reference     String? // شمارهٔ فاکتور طرف مقابل
+  description   String?
+  subtotal      BigInt        @default(0)
+  discount      BigInt        @default(0)
+  taxAmount     BigInt        @default(0)
+  total         BigInt        @default(0)
+  settledAmount BigInt        @default(0)
+  status        InvoiceStatus @default(DRAFT)
+  voucherId     String?       @unique
+  createdById   String
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  entity      Entity        @relation(fields: [entityId], references: [id])
+  party       Party         @relation(fields: [partyId], references: [id])
+  voucher     Voucher?      @relation("InvoiceVoucher", fields: [voucherId], references: [id])
+  createdBy   User          @relation(fields: [createdById], references: [id])
+  lines       InvoiceLine[]
+  settlements Settlement[]
+  allocations TreasuryAllocation[]
+
+  @@unique([entityId, type, number])
+  @@index([entityId, date])
+  @@index([partyId])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id              String   @id @default(cuid())
+  invoiceId       String
+  lineNo          Int
+  title           String
+  accountId       String
+  quantity        Decimal  @default(1) @db.Decimal(18, 4)
+  unitPrice       BigInt
+  discount        BigInt   @default(0)
+  taxRate         Decimal  @default(0) @db.Decimal(5, 2)
+  taxAmount       BigInt   @default(0)
+  amount          BigInt   @default(0)
+  businessDimId   String?
+  costCenterDimId String?
+  projectDimId    String?
+  description     String?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+/// تطبیق دریافت/پرداخت با فاکتور
+model Settlement {
+  id            String   @id @default(cuid())
+  invoiceId     String
+  treasuryTxnId String?
+  amount        BigInt
+  date          DateTime @db.Date
+  note          String?
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  treasuryTxn TreasuryTxn? @relation(fields: [treasuryTxnId], references: [id])
+  createdBy   User         @relation(fields: [createdById], references: [id])
+
+  @@index([invoiceId])
+  @@map("settlements")
+}
+
+/// منبع رویداد (هر سایت یک منبع)
+model IngestSource {
+  id            String        @id @default(cuid())
+  code          String        @unique
+  name          String
+  entityId      String
+  businessDimId String
+  secretHash    String
+  config        Json?
+  active        Boolean       @default(true)
+  lastEventAt   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  entity Entity        @relation(fields: [entityId], references: [id])
+  events IngestEvent[]
+
+  @@map("ingest_sources")
+}
+
+enum IngestStatus {
+  PENDING
+  POSTED
+  FAILED
+  IGNORED
+}
+
+model IngestEvent {
+  id          String       @id @default(cuid())
+  sourceId    String
+  type        String
+  externalId  String
+  payload     Json
+  amount      BigInt?
+  status      IngestStatus @default(PENDING)
+  error       String?
+  voucherId   String?
+  receivedAt  DateTime     @default(now())
+  processedAt DateTime?
+
+  source  IngestSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  voucher Voucher?     @relation("IngestVoucher", fields: [voucherId], references: [id])
+
+  @@unique([sourceId, externalId])
+  @@index([status])
+  @@index([sourceId, receivedAt])
+  @@map("ingest_events")
+}
+
+enum AllocationMethod {
+  FIXED // درصد ثابت
+  EQUAL // تقسیم مساوی
+  REVENUE_SHARE // به نسبت درآمد دوره
+}
+
+model AllocationRule {
+  id                 String           @id @default(cuid())
+  entityId           String
+  name               String
+  method             AllocationMethod @default(REVENUE_SHARE)
+  sourceBusinessDimId String?
+  accountCodes       String[]         @default([])
+  weights            Json?
+  active             Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  entity Entity          @relation(fields: [entityId], references: [id])
+  runs   AllocationRun[]
+
+  @@map("allocation_rules")
+}
+
+model AllocationRun {
+  id          String   @id @default(cuid())
+  ruleId      String
+  entityId    String
+  periodId    String
+  voucherId   String?  @unique
+  totalAmount BigInt   @default(0)
+  detail      Json?
+  createdById String
+  createdAt   DateTime @default(now())
+
+  rule      AllocationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  period    FiscalPeriod   @relation(fields: [periodId], references: [id])
+  voucher   Voucher?       @relation("AllocationVoucher", fields: [voucherId], references: [id])
+  createdBy User           @relation(fields: [createdById], references: [id])
+
+  @@unique([ruleId, periodId])
+  @@map("allocation_runs")
+}
+
+enum RecurrenceKind {
+  NONE
+  MONTHLY
+}
+
+/// قالب سند برای ثبت‌های تکراری (حقوق، اجاره، استهلاک و…)
+model VoucherTemplate {
+  id          String         @id @default(cuid())
+  entityId    String
+  name        String
+  description String?
+  voucherType VoucherType    @default(NORMAL)
+  lines       Json
+  recurrence  RecurrenceKind @default(NONE)
+  dayOfMonth  Int            @default(1)
+  active      Boolean        @default(true)
+  lastUsedAt  DateTime?
+  createdById String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  entity    Entity @relation(fields: [entityId], references: [id])
+  createdBy User   @relation(fields: [createdById], references: [id])
+
+  @@map("voucher_templates")
 }

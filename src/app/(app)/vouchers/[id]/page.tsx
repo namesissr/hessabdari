@@ -12,6 +12,7 @@ import { PrintButton } from '@/components/print-button';
 import { loadEditorData } from '../editor-data';
 import { VoucherEditor } from '../voucher-editor';
 import { deleteAction, postAction, reverseAction, reviewAction } from '../actions';
+import { templateFromVoucherAction } from '../../templates/actions';
 
 export const metadata = { title: 'سند حسابداری' };
 
@@ -162,6 +163,18 @@ export default async function VoucherPage({ params, searchParams }: { params: Pr
             {v.postedBy && v.postedAt && <li>قطعی: {v.postedBy.name} — {formatJ(v.postedAt)}</li>}
           </ul>
         </Card>
+        {can(user, 'voucher.edit') && (
+          <Card title="ذخیره به عنوان قالب" className="no-print">
+            <ActionForm action={templateFromVoucherAction.bind(null, v.id)} submitLabel="ساخت قالب از این سند" variant="secondary" size="sm">
+              <p className="text-xs text-muted">ردیف‌ها، حساب‌ها و تفصیلی‌های همین سند به‌عنوان قالب ذخیره می‌شوند تا ماه‌های بعد با یک کلیک ثبت شود.</p>
+              <div><label className="label">نام قالب</label><input name="name" className="input" defaultValue={v.description ?? ''} /></div>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-1.5"><input type="checkbox" name="keepAmounts" defaultChecked /> مبالغ هم ذخیره شوند</label>
+                <label className="flex items-center gap-1.5"><input type="checkbox" name="monthly" /> ثبت ماهانه</label>
+              </div>
+            </ActionForm>
+          </Card>
+        )}
         {v.status === 'POSTED' && !v.reversedBy && !['REVERSAL', 'OPENING', 'PL_CLOSING', 'CLOSING'].includes(v.type) && can(user, 'voucher.post') && v.fiscalYear.status === 'OPEN' && (
           <Card title="صدور سند برگشت" className="no-print">
             <ActionForm action={reverseAction.bind(null, v.id)} submitLabel="صدور و قطعی کردن سند برگشت" variant="danger" confirm="سند برگشت با ردیف‌های معکوس صادر و قطعی می‌شود. ادامه؟">

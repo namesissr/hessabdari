@@ -4,8 +4,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
-  BarChart3, BookOpen, Building2, CalendarRange, FileText, Layers, LayoutDashboard, ListTree, LogOut, Menu, NotebookPen,
-  Scale, ScrollText, Tags, Users, Wallet, X,
+  BarChart3, BookMarked, BookOpen, Building2, CalendarRange, FileText, Layers, LayoutDashboard, ListTree, LogOut, Menu, NotebookPen,
+  Receipt, Scale, ScrollText, Search, ShieldCheck, Stethoscope, Tags, Users, Wallet, X, Banknote, Landmark, Contact, FileSpreadsheet, Copy, Plug, Split, Hourglass,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { switchEntity, switchFiscalYear, logoutAction } from '@/app/(app)/actions';
@@ -40,6 +40,12 @@ export function Shell({
       items: [
         { href: '/', label: 'داشبورد مدیریتی', icon: LayoutDashboard },
         { href: '/vouchers', label: 'اسناد حسابداری', icon: NotebookPen },
+        { href: '/invoices', label: 'فاکتورها', icon: FileSpreadsheet },
+        { href: '/treasury', label: 'دریافت و پرداخت', icon: Receipt },
+        { href: '/cheques', label: 'چک‌ها', icon: Banknote },
+        { href: '/banks', label: 'بانک، صندوق و تنخواه', icon: Landmark },
+        { href: '/parties', label: 'طرف حساب‌ها', icon: Contact },
+        { href: '/templates', label: 'قالب و سند تکراری', icon: Copy },
       ],
     },
     {
@@ -47,8 +53,11 @@ export function Shell({
       items: [
         { href: '/reports/trial-balance', label: 'تراز آزمایشی', icon: Scale },
         { href: '/reports/journal', label: 'دفتر روزنامه', icon: ScrollText },
-        { href: '/reports/ledger', label: 'دفتر کل / معین / تفصیلی', icon: BookOpen },
+        { href: '/reports/general-ledger', label: 'دفتر کل', icon: BookOpen },
+        { href: '/reports/subsidiary-ledger', label: 'دفتر معین', icon: BookMarked },
+        { href: '/reports/ledger', label: 'گردش حساب و دفتر تفصیلی', icon: Search },
         { href: '/reports/dimension', label: 'گزارش تفصیلی و مراکز', icon: Layers },
+        { href: '/reports/aging', label: 'گزارش سنی بدهکاران', icon: Hourglass },
         { href: '/reports/income-statement', label: 'سود و زیان', icon: BarChart3 },
         { href: '/reports/balance-sheet', label: 'ترازنامه', icon: FileText },
       ],
@@ -58,9 +67,14 @@ export function Shell({
       items: [
         { href: '/settings/accounts', label: 'کدینگ حساب‌ها', icon: ListTree, show: true },
         { href: '/settings/dimensions', label: 'تفصیلی‌ها و کسب‌وکارها', icon: Tags, show: true },
+        { href: '/settings/cheque-layouts', label: 'قالب چاپ چک', icon: Banknote, show: perms.settings },
+        { href: '/settings/ingest', label: 'اتصال سایت‌ها', icon: Plug, show: perms.settings },
+        { href: '/settings/allocation', label: 'تسهیم هزینه‌های مشترک', icon: Split, show: perms.settings },
         { href: '/settings/fiscal-years', label: 'سال و دوره مالی', icon: CalendarRange, show: true },
+        { href: '/settings/health', label: 'بررسی سلامت دفاتر', icon: Stethoscope, show: perms.settings },
         { href: '/settings/entities', label: 'شرکت‌ها', icon: Building2, show: perms.entities },
         { href: '/settings/users', label: 'کاربران', icon: Users, show: perms.users },
+        { href: '/settings/audit-log', label: 'لاگ ممیزی', icon: ShieldCheck, show: perms.users },
       ],
     },
   ];

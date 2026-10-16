@@ -2,6 +2,7 @@ import prisma from '@/lib/prisma';
 import { loadChart } from '@/modules/accounts/chart';
 import { SearchSelect } from './search-select';
 import { PrintButton } from './print-button';
+import { ExportButton } from './export-button';
 
 type SPv = Record<string, string | string[] | undefined>;
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] ?? '' : v ?? '');
@@ -85,9 +86,10 @@ export async function ReportFilters({
             شامل اسناد اختتامیه
           </label>
         )}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="rounded-lg bg-slate-800 px-4 py-2 text-sm text-white">نمایش</button>
           <PrintButton />
+          <ExportButton />
         </div>
       </div>
     </form>

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import prisma from '@/lib/prisma';
-import { formatJ, parseJ, todayUtc, toFaDigits } from '@/lib/jalali';
+import { addDays, formatJ, parseJ, todayUtc, toFaDigits } from '@/lib/jalali';
 import { one, pageContext, type SP } from '@/lib/page';
 import { dashboard } from '@/modules/reports/financial';
 import { Badge, Card, Empty, LinkButton, Money, PageHeader, Stat, STATUS_LABEL } from '@/components/ui';
@@ -24,6 +24,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: SP
     take: 8,
   });
   const pending = await prisma.voucher.count({ where: { entityId: { in: entityIds }, status: { not: 'POSTED' } } });
+  const upcomingCheques = await prisma.cheque.findMany({
+    where: {
+      entityId: { in: entityIds },
+      isGuarantee: false,
+      OR: [
+        { direction: 'ISSUED', status: { in: ['ISSUED', 'BOUNCED'] } },
+        { direction: 'RECEIVED', status: { in: ['IN_HAND', 'DEPOSITED', 'BOUNCED'] } },
+      ],
+      dueDate: { lte: addDays(asOf, 14) },
+    },
+    orderBy: { dueDate: 'asc' },
+    take: 8,
+    include: { party: { include: { dimensionValue: true } } },
+  });
 
   if (!data) return <Empty>برای تاریخ {formatJ(asOf)} سال مالی تعریف نشده است.</Empty>;
   const is = data.incomeStatement;
@@ -136,6 +150,29 @@ export default async function DashboardPage({ searchParams }: { searchParams: SP
         </div>
         <div className="border-t border-line px-4 py-2 text-xs text-muted">
           <Link className="text-brand-700" href="/reports/income-statement">صورت سود و زیان کامل ←</Link>
+        </div>
+      </Card>
+
+      <Card title="چک‌های سررسید نزدیک و معوق" className="mb-6" bodyClass="p-0">
+        {upcomingCheques.length === 0 ? (
+          <div className="p-4 text-sm text-muted">چکی در دو هفتهٔ آینده سررسید ندارد.</div>
+        ) : (
+          <table className="table">
+            <tbody>
+              {upcomingCheques.map((c) => (
+                <tr key={c.id} className={c.dueDate < asOf ? 'bg-red-50' : undefined}>
+                  <td className="whitespace-nowrap">{formatJ(c.dueDate)}{c.dueDate < asOf && <span className="mr-2 text-xs text-red-600">معوق</span>}</td>
+                  <td><Badge tone={c.direction === 'ISSUED' ? 'amber' : 'green'}>{c.direction === 'ISSUED' ? 'پرداختی' : 'دریافتی'}</Badge></td>
+                  <td><Link className="text-brand-700 hover:underline" href={`/cheques/${c.id}`}>چک {c.serialNo}</Link></td>
+                  <td className="text-xs">{c.party?.dimensionValue.name ?? c.counterpartyName ?? '—'}</td>
+                  <td><Money value={c.amount} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="border-t border-line px-4 py-2 text-xs">
+          <Link className="text-brand-700" href="/cheques">مدیریت چک‌ها ←</Link>
         </div>
       </Card>
 
