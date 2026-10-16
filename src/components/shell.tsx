@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
   BarChart3, BookMarked, BookOpen, Building2, CalendarRange, FileText, Layers, LayoutDashboard, ListTree, LogOut, Menu, NotebookPen,
-  Receipt, Scale, ScrollText, Search, ShieldCheck, Stethoscope, Tags, Users, Wallet, X, Banknote, Landmark, Contact, FileSpreadsheet, Copy, Plug, Split, Hourglass,
+  Receipt, Scale, ScrollText, Search, ShieldCheck, Stethoscope, Tags, Users, Wallet, X, Banknote, Landmark, Contact, FileSpreadsheet, Copy, Plug, Split, Hourglass, UserCog, Wallet2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { switchEntity, switchFiscalYear, logoutAction } from '@/app/(app)/actions';
@@ -49,6 +49,13 @@ export function Shell({
       ],
     },
     {
+      title: 'کارکنان',
+      items: [
+        { href: '/employees', label: 'کارکنان', icon: UserCog },
+        { href: '/payroll', label: 'حقوق و دستمزد', icon: Wallet2 },
+      ],
+    },
+    {
       title: 'گزارش‌ها',
       items: [
         { href: '/reports/trial-balance', label: 'تراز آزمایشی', icon: Scale },
@@ -70,6 +77,7 @@ export function Shell({
         { href: '/settings/cheque-layouts', label: 'قالب چاپ چک', icon: Banknote, show: perms.settings },
         { href: '/settings/ingest', label: 'اتصال سایت‌ها', icon: Plug, show: perms.settings },
         { href: '/settings/allocation', label: 'تسهیم هزینه‌های مشترک', icon: Split, show: perms.settings },
+        { href: '/settings/payroll', label: 'نرخ‌های حقوق و دستمزد', icon: Wallet2, show: perms.settings },
         { href: '/settings/fiscal-years', label: 'سال و دوره مالی', icon: CalendarRange, show: true },
         { href: '/settings/health', label: 'بررسی سلامت دفاتر', icon: Stethoscope, show: perms.settings },
         { href: '/settings/entities', label: 'شرکت‌ها', icon: Building2, show: perms.entities },

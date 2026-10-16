@@ -56,6 +56,9 @@ model Entity {
   bankAccounts    BankAccount[]
   invoices        Invoice[]
   ingestSources   IngestSource[]
+  employees       Employee[]
+  payrollRuns     PayrollRun[]
+  payrollSettings PayrollSettings[]
   allocationRules AllocationRule[]
   voucherTemplates VoucherTemplate[]
   cheques         Cheque[]
@@ -126,6 +129,7 @@ model FiscalPeriod {
   vouchers       Voucher[]
   balances       GlBalance[]
   allocationRuns AllocationRun[]
+  payrollRuns    PayrollRun[]
 
   @@unique([fiscalYearId, no])
   @@map("fiscal_periods")
@@ -370,6 +374,8 @@ model Voucher {
   chequeEvents ChequeEvent[] @relation("ChequeEventVoucher")
   invoice      Invoice?      @relation("InvoiceVoucher")
   ingestEvents IngestEvent[] @relation("IngestVoucher")
+  payrollRun   PayrollRun?   @relation("PayrollVoucher")
+  employeeLoans EmployeeLoan[] @relation("EmployeeLoanVoucher")
   allocationRun AllocationRun? @relation("AllocationVoucher")
 
   @@unique([fiscalYearId, number])
@@ -469,6 +475,9 @@ model User {
   treasuryTxns     TreasuryTxn[]
   invoices         Invoice[]
   settlements      Settlement[]
+  employees        Employee[]
+  employeeLoans    EmployeeLoan[]
+  payrollRuns      PayrollRun[]
   allocationRuns   AllocationRun[]
   voucherTemplates VoucherTemplate[]
 
@@ -542,6 +551,7 @@ model Party {
   treasuryTxns   TreasuryTxn[]
   allocations    TreasuryAllocation[]
   invoices       Invoice[]
+  employee       Employee?
 
   @@map("parties")
 }
@@ -1022,4 +1032,293 @@ model VoucherTemplate {
   createdBy User   @relation(fields: [createdById], references: [id])
 
   @@map("voucher_templates")
+}
+
+// ───────────────────────── فاز ۴: کارکنان، حقوق و دستمزد
+
+enum EmployeeStatus {
+  ACTIVE // شاغل
+  ON_LEAVE // مرخصی بلندمدت
+  SUSPENDED // تعلیق
+  TERMINATED // پایان همکاری
+}
+
+enum ContractType {
+  PERMANENT // دائم
+  TEMPORARY // مدت معین
+  PROJECT // پروژه‌ای
+  HOURLY // ساعتی
+  CONTRACTOR // پیمانکار / حق‌التدریس
+  INTERN // کارآموز
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+}
+
+model Employee {
+  id             String         @id @default(cuid())
+  entityId       String
+  partyId        String         @unique
+  code           String
+  firstName      String
+  lastName       String
+  fatherName     String?
+  nationalCode   String?
+  idNumber       String? // شمارهٔ شناسنامه
+  birthDate      DateTime?      @db.Date
+  gender         Gender         @default(MALE)
+  maritalStatus  MaritalStatus  @default(SINGLE)
+  childrenCount  Int            @default(0)
+  mobile         String?
+  phone          String?
+  email          String?
+  address        String?
+  emergencyName  String?
+  emergencyPhone String?
+
+  hireDate        DateTime      @db.Date
+  contractType    ContractType  @default(PERMANENT)
+  position        String? // سمت
+  businessDimId   String?
+  costCenterDimId String?
+  managerId       String?
+
+  insuranceNo     String? // شمارهٔ بیمه
+  insured         Boolean  @default(true)
+  taxFileNo       String?
+  taxExempt       Boolean  @default(false)
+
+  bankName  String?
+  accountNo String?
+  iban      String?
+
+  baseSalary         BigInt @default(0) // حقوق پایهٔ ماهانه
+  housingAllowance   BigInt @default(0) // حق مسکن
+  foodAllowance      BigInt @default(0) // بن خواربار
+  childAllowance     BigInt @default(0) // حق اولاد (۰ یعنی از تنظیمات محاسبه شود)
+  transportAllowance BigInt @default(0) // ایاب و ذهاب
+  otherAllowance     BigInt @default(0) // سایر مزایا
+  severanceStartDate DateTime? @db.Date // مبنای محاسبهٔ سنوات (پیش‌فرض تاریخ استخدام)
+
+  status            EmployeeStatus @default(ACTIVE)
+  terminationDate   DateTime?      @db.Date
+  terminationReason String?
+  notes             String?
+  createdById       String
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  entity    Entity             @relation(fields: [entityId], references: [id])
+  party     Party              @relation(fields: [partyId], references: [id])
+  manager   Employee?          @relation("EmployeeManager", fields: [managerId], references: [id])
+  reports   Employee[]         @relation("EmployeeManager")
+  createdBy User               @relation(fields: [createdById], references: [id])
+  contracts EmployeeContract[]
+  payslips  PayrollItem[]
+  loans     EmployeeLoan[]
+  leaves    LeaveRecord[]
+
+  @@unique([entityId, code])
+  @@index([entityId, status])
+  @@map("employees")
+}
+
+/// تاریخچهٔ قرارداد و حکم حقوقی
+model EmployeeContract {
+  id                 String       @id @default(cuid())
+  employeeId         String
+  startDate          DateTime     @db.Date
+  endDate            DateTime?    @db.Date
+  contractType       ContractType
+  position           String?
+  baseSalary         BigInt
+  housingAllowance   BigInt       @default(0)
+  foodAllowance      BigInt       @default(0)
+  transportAllowance BigInt       @default(0)
+  otherAllowance     BigInt       @default(0)
+  note               String?
+  createdAt          DateTime     @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("employee_contracts")
+}
+
+enum LeaveType {
+  ANNUAL // استحقاقی
+  SICK // استعلاجی
+  UNPAID // بدون حقوق
+  MISSION // مأموریت
+  OTHER
+}
+
+model LeaveRecord {
+  id         String    @id @default(cuid())
+  employeeId String
+  type       LeaveType
+  fromDate   DateTime  @db.Date
+  toDate     DateTime  @db.Date
+  days       Decimal   @db.Decimal(6, 2)
+  note       String?
+  createdAt  DateTime  @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("leave_records")
+}
+
+enum EmployeeLoanStatus {
+  ACTIVE
+  SETTLED
+  CANCELLED
+}
+
+/// وام و مساعدهٔ کارکنان (از حقوق کسر می‌شود)
+model EmployeeLoan {
+  id                String             @id @default(cuid())
+  employeeId        String
+  date              DateTime           @db.Date
+  amount            BigInt
+  installmentAmount BigInt             @default(0)
+  paidAmount        BigInt             @default(0)
+  isAdvance         Boolean            @default(false) // مساعده (یک‌جا از حقوق همان ماه کسر می‌شود)
+  description       String?
+  voucherId         String?
+  status            EmployeeLoanStatus @default(ACTIVE)
+  createdById       String
+  createdAt         DateTime           @default(now())
+
+  employee  Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  voucher   Voucher? @relation("EmployeeLoanVoucher", fields: [voucherId], references: [id])
+  createdBy User     @relation(fields: [createdById], references: [id])
+
+  @@index([employeeId])
+  @@map("employee_loans")
+}
+
+enum PayrollStatus {
+  DRAFT
+  POSTED
+}
+
+/// لیست حقوق یک ماه
+model PayrollRun {
+  id              String        @id @default(cuid())
+  entityId        String
+  periodId        String
+  jy              Int
+  jm              Int
+  title           String
+  payDate         DateTime?     @db.Date
+  status          PayrollStatus @default(DRAFT)
+  voucherId       String?       @unique
+  totalGross      BigInt        @default(0)
+  totalNet        BigInt        @default(0)
+  totalTax        BigInt        @default(0)
+  totalInsurance  BigInt        @default(0)
+  totalEmployerCost BigInt      @default(0)
+  settings        Json?
+  note            String?
+  createdById     String
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  entity    Entity        @relation(fields: [entityId], references: [id])
+  period    FiscalPeriod  @relation(fields: [periodId], references: [id])
+  voucher   Voucher?      @relation("PayrollVoucher", fields: [voucherId], references: [id])
+  createdBy User          @relation(fields: [createdById], references: [id])
+  items     PayrollItem[]
+
+  @@unique([entityId, jy, jm])
+  @@map("payroll_runs")
+}
+
+/// فیش حقوقی یک کارمند در یک ماه
+model PayrollItem {
+  id         String @id @default(cuid())
+  runId      String
+  employeeId String
+
+  workingDays       Decimal @default(30) @db.Decimal(6, 2)
+  absenceDays       Decimal @default(0) @db.Decimal(6, 2)
+  overtimeHours     Decimal @default(0) @db.Decimal(8, 2)
+  holidayHours      Decimal @default(0) @db.Decimal(8, 2)
+  nightHours        Decimal @default(0) @db.Decimal(8, 2)
+  missionDays       Decimal @default(0) @db.Decimal(6, 2)
+
+  baseAmount         BigInt @default(0)
+  housingAllowance   BigInt @default(0)
+  foodAllowance      BigInt @default(0)
+  childAllowance     BigInt @default(0)
+  transportAllowance BigInt @default(0)
+  otherAllowance     BigInt @default(0)
+  overtimeAmount     BigInt @default(0)
+  holidayAmount      BigInt @default(0)
+  nightAmount        BigInt @default(0)
+  missionAmount      BigInt @default(0)
+  bonus              BigInt @default(0)
+  grossEarnings      BigInt @default(0)
+
+  insuranceBase     BigInt @default(0)
+  insuranceEmployee BigInt @default(0)
+  insuranceEmployer BigInt @default(0)
+  taxBase           BigInt @default(0)
+  tax               BigInt @default(0)
+  loanDeduction     BigInt @default(0)
+  advanceDeduction  BigInt @default(0)
+  otherDeduction    BigInt @default(0)
+  totalDeductions   BigInt @default(0)
+  netPay            BigInt @default(0)
+
+  severanceAccrual BigInt @default(0)
+  leaveAccrual     BigInt @default(0)
+  employerCost     BigInt @default(0)
+
+  note String?
+
+  run      PayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employee Employee   @relation(fields: [employeeId], references: [id])
+
+  @@unique([runId, employeeId])
+  @@index([employeeId])
+  @@map("payroll_items")
+}
+
+/// نرخ‌ها و حساب‌های حقوق و دستمزد برای هر سال (قابل ویرایش در پنل)
+model PayrollSettings {
+  id       String @id @default(cuid())
+  entityId String
+  jy       Int
+
+  dailyMinWage       BigInt  @default(0)
+  monthlyWorkHours   Decimal @default(192) @db.Decimal(6, 2)
+  insuranceEmployeeRate Decimal @default(7) @db.Decimal(5, 2)
+  insuranceEmployerRate Decimal @default(23) @db.Decimal(5, 2)
+  insuranceCeiling   BigInt  @default(0) // سقف دستمزد مشمول بیمه (۰ = بدون سقف)
+  taxExemptMonthly   BigInt  @default(0)
+  taxBrackets        Json // [{ to: number|null, rate: number }]
+  childAllowanceRate BigInt  @default(0) // به ازای هر فرزند
+  housingDefault     BigInt  @default(0)
+  foodDefault        BigInt  @default(0)
+  overtimeFactor     Decimal @default(1.4) @db.Decimal(5, 2)
+  holidayFactor      Decimal @default(1.4) @db.Decimal(5, 2)
+  nightFactor        Decimal @default(0.35) @db.Decimal(5, 2)
+  severanceDaysPerYear Int   @default(30)
+  accounts           Json // کدهای حساب
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  entity Entity @relation(fields: [entityId], references: [id])
+
+  @@unique([entityId, jy])
+  @@map("payroll_settings")
 }
